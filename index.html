@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ตรวจงาน PDF</title>
+<style>
+:root{--bg:#e8e6e1;--panel:#fff;--ink:#1d1d1b;--mut:#6b6a66;--line:#d3d0c8;--red:#d92d20;--f:"Noto Sans Thai","Leelawadee UI",Tahoma,Sarabun,sans-serif}
+@media (prefers-color-scheme:dark){:root{--bg:#1b1b1a;--panel:#2a2a28;--ink:#f1efe9;--mut:#a3a19b;--line:#434240}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--f);display:flex;flex-direction:column}
+#tb{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+button,select{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 12px;cursor:pointer}
+button:hover:not(:disabled){border-color:var(--ink)}
+button:disabled{opacity:.4;cursor:default}
+button:focus-visible,select:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+button.on{background:var(--red);border-color:var(--red);color:#fff}
+button.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.sep{width:1px;height:22px;background:var(--line)}
+.sw{width:24px;height:24px;border-radius:50%;padding:0;border:2px solid var(--panel);box-shadow:0 0 0 1px var(--line)}
+.sw.act{box-shadow:0 0 0 2px var(--ink)}
+.grow{flex:1}
+#stage{flex:1;padding:16px;display:flex;flex-direction:column;align-items:center;gap:16px}
+#drop{margin:auto;width:min(480px,100%);padding:48px 24px;text-align:center;border:2px dashed var(--line);border-radius:12px;color:var(--mut)}
+#drop.over{border-color:var(--red);color:var(--ink)}
+#drop b{display:block;font-size:18px;color:var(--ink);margin-bottom:4px}
+.page{position:relative;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.25)}
+.page canvas{display:block}
+.ov{position:absolute;inset:0}
+body.add .ov{cursor:text}
+.box{position:absolute}
+.txt{width:200px;min-width:70px;min-height:1.4em;padding:3px 5px;border:1px dashed transparent;line-height:1.4;font-family:var(--f);outline:none;overflow:hidden;resize:horizontal;white-space:pre-wrap;word-break:break-word}
+.box:hover .txt,.box.sel .txt{border-color:currentColor}
+.txt:empty::before{content:attr(data-ph);opacity:.45}
+.bar{position:absolute;left:0;top:-21px;height:21px;display:none;align-items:center;gap:4px;padding:0 2px 0 8px;background:#1d1d1b;color:#fff;font-size:11px;border-radius:4px 4px 0 0;cursor:grab;white-space:nowrap;touch-action:none;user-select:none}
+.box:hover .bar,.box.sel .bar{display:flex}
+.bar .x{background:none;border:0;color:#fff;padding:0 6px;font-size:14px;line-height:1}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:50}
+#toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div id="tb">
+  <button id="open">เปิดไฟล์ PDF</button>
+  <button id="add" disabled title="ลัด: กด T">+ กล่องข้อความ</button>
+  <span class="sep"></span>
+  <button class="sw act" data-c="#d92d20" style="background:#d92d20" title="แดง" aria-label="แดง"></button>
+  <button class="sw" data-c="#1d4ed8" style="background:#1d4ed8" title="น้ำเงิน" aria-label="น้ำเงิน"></button>
+  <button class="sw" data-c="#15803d" style="background:#15803d" title="เขียว" aria-label="เขียว"></button>
+  <button class="sw" data-c="#111111" style="background:#111" title="ดำ" aria-label="ดำ"></button>
+  <select id="size" aria-label="ขนาดตัวอักษร">
+    <option>12</option><option>14</option><option selected>16</option><option>20</option><option>26</option>
+  </select>
+  <span class="grow"></span>
+  <button id="exp" class="primary" disabled>Export PDF</button>
+  <input type="file" id="file" accept="application/pdf,.pdf" hidden>
+</div>
+<div id="stage">
+  <div id="drop"><b>ลากไฟล์ PDF มาวางที่นี่</b>หรือกด “เปิดไฟล์ PDF” — ไฟล์ไม่ถูกอัพโหลดไปไหน ประมวลผลในเครื่องเท่านั้น</div>
+</div>
+<div id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const $=s=>document.querySelector(s);
+let bytes=null,fname='',color='#d92d20',size=16,sel=null,dirty=false;
+
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>t.classList.remove('show'),2500)}
+function setAdd(on){document.body.classList.toggle('add',on);$('#add').classList.toggle('on',on)}
+function select(b){if(sel)sel.classList.remove('sel');sel=b;if(b)b.classList.add('sel')}
+
+async function load(file){
+  if(!file||!/\.pdf$/i.test(file.name)&&file.type!=='application/pdf')return toast('กรุณาเลือกไฟล์ PDF');
+  try{
+    bytes=new Uint8Array(await file.arrayBuffer());
+    fname=file.name.replace(/\.pdf$/i,'');
+    const doc=await pdfjsLib.getDocument({data:bytes.slice()}).promise;
+    const st=$('#stage');st.innerHTML='';
+    const w=Math.min(st.clientWidth-32,860),dpr=window.devicePixelRatio||1;
+    for(let i=1;i<=doc.numPages;i++){
+      const p=await doc.getPage(i),s=w/p.getViewport({scale:1}).width,vp=p.getViewport({scale:s});
+      const pg=document.createElement('div');pg.className='page';pg.dataset.i=i-1;pg.dataset.s=s;
+      pg.style.width=vp.width+'px';pg.style.height=vp.height+'px';
+      const cv=document.createElement('canvas');cv.width=vp.width*dpr;cv.height=vp.height*dpr;
+      cv.style.width=vp.width+'px';cv.style.height=vp.height+'px';
+      const ov=document.createElement('div');ov.className='ov';
+      ov.addEventListener('pointerdown',e=>{
+        if(e.target!==ov)return;
+        if(document.body.classList.contains('add')){addBox(ov,e.offsetX,e.offsetY);setAdd(false)}else select(null)
+      });
+      pg.append(cv,ov);st.append(pg);
+      await p.render({canvasContext:cv.getContext('2d'),viewport:vp,transform:[dpr,0,0,dpr,0,0]}).promise;
+    }
+    $('#add').disabled=$('#exp').disabled=false;setAdd(true);dirty=false;
+    toast('คลิกบนหน้ากระดาษเพื่อวางกล่องข้อความ');
+  }catch(err){console.error(err);toast('เปิดไฟล์ไม่ได้ (ไฟล์อาจเสียหรือมีรหัสผ่าน)')}
+}
+
+function addBox(ov,x,y){
+  const b=document.createElement('div');b.className='box';
+  b.style.left=Math.max(0,Math.min(x,ov.clientWidth-210))+'px';b.style.top=Math.max(22,y)+'px';
+  b.innerHTML='<div class="bar"><span>ลากย้าย</span><button class="x" title="ลบ">×</button></div><div class="txt" contenteditable="plaintext-only" data-ph="พิมพ์คอมเมนต์…"></div>';
+  const t=b.querySelector('.txt'),bar=b.querySelector('.bar');
+  t.style.color=color;t.style.fontSize=size+'px';
+  t.addEventListener('focus',()=>select(b));
+  t.addEventListener('input',()=>dirty=true);
+  t.addEventListener('blur',()=>setTimeout(()=>{if(!t.textContent.trim()&&document.activeElement!==t)b.remove()},150));
+  bar.querySelector('.x').addEventListener('click',()=>{b.remove();sel=null;dirty=true});
+  bar.addEventListener('pointerdown',e=>{
+    if(e.target.closest('.x'))return;
+    e.preventDefault();select(b);bar.setPointerCapture(e.pointerId);
+    const dx=e.clientX-b.offsetLeft,dy=e.clientY-b.offsetTop;
+    const mv=ev=>{b.style.left=Math.max(0,Math.min(ov.clientWidth-40,ev.clientX-dx))+'px';b.style.top=Math.max(22,Math.min(ov.clientHeight-20,ev.clientY-dy))+'px';dirty=true};
+    const up=()=>{bar.removeEventListener('pointermove',mv);bar.removeEventListener('pointerup',up)};
+    bar.addEventListener('pointermove',mv);bar.addEventListener('pointerup',up);
+  });
+  ov.append(b);t.focus();
+}
+
+function wrap(x,text,mw){
+  const seg=window.Intl&&Intl.Segmenter?new Intl.Segmenter('th',{granularity:'word'}):null,out=[];
+  for(const para of text.split('\n')){
+    const toks=seg?[...seg.segment(para)].map(s=>s.segment):[...para];let line='';
+    for(const tk of toks){
+      if(!line||x.measureText(line+tk).width<=mw)line+=tk;else{out.push(line.trimEnd());line=tk.trimStart()}
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+async function exportPdf(){
+  const btn=$('#exp');btn.disabled=true;btn.textContent='กำลังสร้าง…';
+  try{
+    const doc=await PDFLib.PDFDocument.load(bytes),pages=doc.getPages();let n=0;
+    for(const pg of document.querySelectorAll('.page')){
+      const page=pages[+pg.dataset.i],s=+pg.dataset.s,H=page.getHeight();
+      for(const b of pg.querySelectorAll('.box')){
+        const t=b.querySelector('.txt'),text=t.innerText.replace(/\s+$/,'');
+        if(!text.trim())continue;
+        const cs=getComputedStyle(t),fs=parseFloat(cs.fontSize),lh=fs*1.4,mw=t.clientWidth-10,k=3;
+        const c=document.createElement('canvas'),x=c.getContext('2d');
+        x.font=`${fs}px ${cs.fontFamily}`;
+        const lines=wrap(x,text,mw),h=lines.length*lh;
+        c.width=Math.ceil(mw*k);c.height=Math.ceil(h*k);
+        x.scale(k,k);x.font=`${fs}px ${cs.fontFamily}`;x.fillStyle=cs.color;x.textBaseline='middle';
+        lines.forEach((l,i)=>x.fillText(l,0,i*lh+lh/2));
+        const img=await doc.embedPng(c.toDataURL('image/png'));
+        page.drawImage(img,{x:(b.offsetLeft+6)/s,y:H-(b.offsetTop+4)/s-h/s,width:mw/s,height:h/s});
+        n++;
+      }
+    }
+    const blob=new Blob([await doc.save()],{type:'application/pdf'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fname+'_checked.pdf';
+    document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+    dirty=false;toast(n?`Export แล้ว (${n} คอมเมนต์)`:'Export แล้ว (ยังไม่มีคอมเมนต์)');
+  }catch(err){console.error(err);toast('Export ไม่สำเร็จ')}
+  btn.disabled=false;btn.textContent='Export PDF';
+}
+
+$('#open').onclick=()=>$('#file').click();
+$('#file').onchange=e=>{load(e.target.files[0]);e.target.value=''};
+$('#add').onclick=()=>setAdd(!document.body.classList.contains('add'));
+$('#exp').onclick=exportPdf;
+$('#size').onchange=e=>{size=+e.target.value;if(sel)sel.querySelector('.txt').style.fontSize=size+'px'};
+document.querySelectorAll('.sw').forEach(s=>s.onclick=()=>{
+  color=s.dataset.c;document.querySelectorAll('.sw').forEach(o=>o.classList.toggle('act',o===s));
+  if(sel)sel.querySelector('.txt').style.color=color;
+});
+$('#tb').addEventListener('mousedown',e=>{if(!e.target.closest('select'))e.preventDefault()});
+addEventListener('keydown',e=>{
+  if(e.target.isContentEditable||e.target.tagName==='SELECT')return;
+  if(e.key==='t'||e.key==='T')$('#add').disabled||setAdd(!document.body.classList.contains('add'));
+  if(e.key==='Escape')setAdd(false);
+});
+addEventListener('dragover',e=>{e.preventDefault();$('#drop')?.classList.add('over')});
+addEventListener('dragleave',()=>$('#drop')?.classList.remove('over'));
+addEventListener('drop',e=>{e.preventDefault();load(e.dataTransfer.files[0])});
+addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});
+</script>
+</body>
+</html>
